@@ -1,10 +1,13 @@
 extern crate proc_macro;
 
+use darling::FromDeriveInput;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::*;
 
+mod container_attributes;
 mod field_attributes;
+use container_attributes::ContainerAttributes;
 use field_attributes::{determine_field_constructor, FieldConstructor};
 
 static ARBITRARY_LIFETIME_NAME: &str = "'arbitrary";
@@ -18,6 +21,8 @@ pub fn derive_arbitrary(tokens: proc_macro::TokenStream) -> proc_macro::TokenStr
 }
 
 fn expand_derive_arbitrary(input: syn::DeriveInput) -> Result<TokenStream> {
+    let container_attrs = ContainerAttributes::from_derive_input(&input).unwrap();
+
     let (lifetime_without_bounds, lifetime_with_bounds) =
         build_arbitrary_lifetime(input.generics.clone());
 
@@ -30,8 +35,13 @@ fn expand_derive_arbitrary(input: syn::DeriveInput) -> Result<TokenStream> {
         gen_arbitrary_method(&input, lifetime_without_bounds.clone(), &recursive_count)?;
     let size_hint_method = gen_size_hint_method(&input)?;
     let name = input.ident;
-    // Add a bound `T: Arbitrary` to every type parameter T.
-    let generics = add_trait_bounds(input.generics, lifetime_without_bounds.clone());
+
+    // Apply user-supplied bounds or automatic `T: ArbitraryBounds`.
+    let generics = apply_trait_bounds(
+        input.generics,
+        lifetime_without_bounds.clone(),
+        &container_attrs,
+    );
 
     // Build ImplGeneric with a lifetime (https://github.com/dtolnay/syn/issues/90)
     let mut generics_with_lifetime = generics.clone();
@@ -74,6 +84,33 @@ fn build_arbitrary_lifetime(generics: Generics) -> (LifetimeDef, LifetimeDef) {
     }
 
     (lifetime_without_bounds, lifetime_with_bounds)
+}
+
+fn apply_trait_bounds(
+    mut generics: Generics,
+    lifetime: LifetimeDef,
+    container_attrs: &ContainerAttributes,
+) -> Generics {
+    // If a user-supplied bounds exist, use them for *every* type parameter.
+    if let Some(config_bounds) = &container_attrs.bound {
+        for param in generics.params.iter_mut() {
+            if let GenericParam::Type(type_param) = param {
+                if let Some(replacement) =
+                    config_bounds.iter().find(|p| p.ident == type_param.ident)
+                {
+                    *type_param = replacement.clone();
+                } else {
+                    // XXX: this deletes the type's bounds, mimicking serde, could keep instead?
+                    type_param.bounds = Default::default();
+                    type_param.default = None;
+                }
+            }
+        }
+        generics
+    } else {
+        // Otherwise, inject a `T: Arbitrary` bound for every parameter.
+        add_trait_bounds(generics, lifetime)
+    }
 }
 
 // Add a bound `T: Arbitrary` to every type parameter T.

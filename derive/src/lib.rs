@@ -55,11 +55,13 @@ fn expand_derive_arbitrary(input: syn::DeriveInput) -> Result<TokenStream> {
 
     Ok(quote! {
         const _: () = {
+            #[allow(clippy::integer_arithmetic)]
             std::thread_local! {
                 #[allow(non_upper_case_globals)]
                 static #recursive_count: std::cell::Cell<u32> = std::cell::Cell::new(0);
             }
 
+            #[allow(clippy::integer_arithmetic)]
             impl #impl_generics arbitrary::Arbitrary<#lifetime_without_bounds> for #name #ty_generics #where_clause {
                 #arbitrary_method
                 #size_hint_method
